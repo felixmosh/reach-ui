@@ -40,7 +40,6 @@
  * @see WAI-ARIA https://www.w3.org/TR/wai-aria-practices-1.2/#tooltip
  */
 
-import * as React from "react";
 import { useId } from "@reach/auto-id";
 import { getDocumentDimensions } from "@reach/utils/get-document-dimensions";
 import { getOwnerDocument } from "@reach/utils/owner-document";
@@ -53,6 +52,7 @@ import { VisuallyHidden } from "@reach/visually-hidden";
 import { useRect } from "@reach/rect";
 import warning from "tiny-warning";
 import PropTypes from "prop-types";
+import * as React from "react";
 
 import type * as Polymorphic from "@reach/utils/polymorphic";
 
@@ -71,6 +71,7 @@ enum TooltipStates {
 
   // It's on!
   Visible = "VISIBLE",
+  ForcedVisible = "FORCED_VISIBLE",
 
   // Focus has left, but we want to keep it visible for a sec
   LeavingVisible = "LEAVING_VISIBLE",
@@ -94,6 +95,8 @@ enum TooltipEvents {
   Rest = "REST",
   SelectWithKeyboard = "SELECT_WITH_KEYBOARD",
   TimeComplete = "TIME_COMPLETE",
+  Tap = "TAP",
+  TapOnOther = "TAP_ON_OTHER",
 }
 
 const chart: StateChart = {
@@ -104,6 +107,7 @@ const chart: StateChart = {
       on: {
         [TooltipEvents.MouseEnter]: TooltipStates.Focused,
         [TooltipEvents.Focus]: TooltipStates.Visible,
+        [TooltipEvents.Tap]: TooltipStates.ForcedVisible,
       },
     },
     [TooltipStates.Focused]: {
@@ -126,6 +130,15 @@ const chart: StateChart = {
         [TooltipEvents.MouseDown]: TooltipStates.Dismissed,
         [TooltipEvents.SelectWithKeyboard]: TooltipStates.Dismissed,
         [TooltipEvents.GlobalMouseMove]: TooltipStates.LeavingVisible,
+        [TooltipEvents.Tap]: TooltipStates.ForcedVisible,
+      },
+    },
+    [TooltipStates.ForcedVisible]: {
+      on: {
+        [TooltipEvents.Blur]: TooltipStates.Idle,
+        [TooltipEvents.SelectWithKeyboard]: TooltipStates.Dismissed,
+        [TooltipEvents.Tap]: TooltipStates.Dismissed,
+        [TooltipEvents.TapOnOther]: TooltipStates.ForcedVisible,
       },
     },
     [TooltipStates.LeavingVisible]: {
@@ -138,6 +151,7 @@ const chart: StateChart = {
         [TooltipEvents.MouseEnter]: TooltipStates.Visible,
         [TooltipEvents.Focus]: TooltipStates.Visible,
         [TooltipEvents.TimeComplete]: TooltipStates.Idle,
+        [TooltipEvents.Tap]: TooltipStates.ForcedVisible,
       },
     },
     [TooltipStates.Dismissed]: {
@@ -147,6 +161,7 @@ const chart: StateChart = {
       on: {
         [TooltipEvents.MouseLeave]: TooltipStates.Idle,
         [TooltipEvents.Blur]: TooltipStates.Idle,
+        [TooltipEvents.Tap]: TooltipStates.ForcedVisible,
       },
     },
   },
@@ -276,6 +291,7 @@ function useTooltip<ElementType extends HTMLElement>({
 
   React.useEffect(() => {
     let ownerDocument = getOwnerDocument(ownRef.current)!;
+
     function listener(event: KeyboardEvent) {
       if (
         (event.key === "Escape" || event.key === "Esc") &&
@@ -284,6 +300,7 @@ function useTooltip<ElementType extends HTMLElement>({
         send({ type: TooltipEvents.SelectWithKeyboard });
       }
     }
+
     ownerDocument.addEventListener("keydown", listener);
     return () => ownerDocument.removeEventListener("keydown", listener);
   }, []);
@@ -354,6 +371,20 @@ function useTooltip<ElementType extends HTMLElement>({
     }
   }
 
+  function handleTap() {
+    if (
+      state.context.id !== id &&
+      state.value === TooltipStates.ForcedVisible
+    ) {
+      send({ type: TooltipEvents.TapOnOther, id });
+    } else {
+      send({
+        type: TooltipEvents.Tap,
+        id,
+      });
+    }
+  }
+
   let trigger: TriggerParams<ElementType> = {
     // The element that triggers the tooltip references the tooltip element with
     // `aria-describedby`.
@@ -385,6 +416,7 @@ function useTooltip<ElementType extends HTMLElement>({
     onFocus: composeEventHandlers(onFocus, handleFocus),
     onBlur: composeEventHandlers(onBlur, handleBlur),
     onKeyDown: composeEventHandlers(onKeyDown, handleKeyDown),
+    onTouchEnd: handleTap,
   };
 
   let tooltip: TooltipParams = {
@@ -761,7 +793,8 @@ function isTooltipVisible(id: string, initial?: boolean) {
     (initial
       ? state.value === TooltipStates.Visible
       : state.value === TooltipStates.Visible ||
-        state.value === TooltipStates.LeavingVisible)
+        state.value === TooltipStates.LeavingVisible ||
+        state.value === TooltipStates.ForcedVisible)
   );
 }
 
@@ -784,6 +817,7 @@ interface TriggerParams<ElementType extends HTMLElement> {
   onFocus: React.ReactEventHandler;
   onBlur: React.ReactEventHandler;
   onKeyDown: React.ReactEventHandler;
+  onTouchEnd: () => void;
 }
 
 interface TooltipParams {
@@ -802,6 +836,8 @@ type MachineEvent =
   | { type: TooltipEvents.MouseEnter; id: string | null }
   | { type: TooltipEvents.MouseLeave }
   | { type: TooltipEvents.MouseMove; id: string | null }
+  | { type: TooltipEvents.Tap; id: string | null }
+  | { type: TooltipEvents.TapOnOther; id: string | null }
   | { type: TooltipEvents.Rest }
   | { type: TooltipEvents.SelectWithKeyboard }
   | { type: TooltipEvents.TimeComplete };
